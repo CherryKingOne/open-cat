@@ -1,8 +1,8 @@
 # 内置原子工具与 Skills（Deep Agents 调研 + 本项目的方案）
 
 > 回答你的四点：**① 基础工具怎么做到不用手动定义；② Skills 怎么用、用户怎么自定义；③ 工具是写死还是让人继承类；④ 工具格式怎么定。**
-> 配套：[ARCHITECTURE.md](./ARCHITECTURE.md) §3、[SDK_SURFACE.md](./SDK_SURFACE.md) §1、[HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)
-> 状态：**方案稿，待评审**（§7 有 4 个需要你拍板的点，其中第 1 个会改动已写文档里的工具命名）
+> 配套：[ARCHITECTURE.md](./ARCHITECTURE.md) §3、[SDK_SURFACE.md](./SDK_SURFACE.md) §1、[HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)、[SANDBOX.md](./SANDBOX.md)（`bash` 工具能不能上面上、看见什么目录，全由它定）
+> 状态：**v2.4 已定稿**（§7 的 4 个点已全部按建议值采纳，裁决记录在 [ARCHITECTURE.md](./ARCHITECTURE.md) §9-9）
 
 ---
 
@@ -126,7 +126,7 @@ backend=CompositeBackend(
 | `edit_file` | `path`, `old_string`, `new_string`, `replace_all=false` | ❌ | ✅ | **唯一匹配才算成功**，多处匹配返回可行动错误 |
 | `glob` | `pattern`, `path?` | ✅ | — | |
 | `grep` | `pattern`, `path?`, `glob?` | ✅ | — | 一期先字面串，二期正则 |
-| `bash` | `command`, `timeoutMs?`, `cwd?` | ❌ | ❓ | 由 `ctx.subprocess` 能力决定是否出现；`scout` profile 下不存在 |
+| `bash` | `command`, `timeoutMs?`, `cwd?` | ❌ | ❓ | 由 `ctx.sandbox` 的 `probe()` 报的 `capabilities.shell` 决定是否出现（**探不到笼子能力就 fail-closed：`bash` 直接不在面上**）；`scout` profile 下笼子＝`read-only`，只能跑白名单只读命令 |
 | `task` | `prompt`, `agent?` | ❌ | ❌ | 派生子 agent；是否算 core 见 §7-2 |
 
 ### 2.2 ★ 命名要改：从 `fs_read` 改成社区约定的 `read_file`（本轮真实的设计修正）
@@ -347,7 +347,7 @@ export const editFile = defineTool({
 });
 ```
 
-注意三条：**(a)** 工具不自己 `fs.readFile`，一切走 `ctx.fs`（否则 §1.6 的路由与沙箱会失效）；**(b)** 失败信息是"下一步动作"而不是状态描述；**(c)** `idempotent: false` + `destructive: true` → policy 默认 ask。
+注意三条：**(a)** 工具不自己 `fs.readFile`，一切走 `ctx.fs`（否则 §1.6 的路由与沙箱会失效——`ctx.fs` 的默认 provider 是由 sandbox 派生的，直连磁盘等于绕过笼子）；**(b)** 失败信息是"下一步动作"而不是状态描述；**(c)** `idempotent: false` + `destructive: true` → policy 默认 ask。
 
 ---
 
@@ -355,26 +355,32 @@ export const editFile = defineTool({
 
 | # | 做什么 | 归属 | 验收 |
 |---|---|---|---|
-| 1 | `ctx.fs` 接口改成七方法形状 + `capabilities`；实现 `StateFs` / `LocalFs(virtual_mode)` | `plugin-fs` | 单测 + 换 backend 不改工具名即可跑通 |
-| 2 | 内置 7+1 工具，命名对齐（§2.2），Consumer 薄壳 | `plugin-fs` / `plugin-subprocess` / `plugin-teams` | `createReactAgent()` 零配置能读写改列搜 |
-| 3 | **能力探测隐面**：`requires` → 装配时过滤 | `plugin-tools` | 给不支持 delete 的 backend 时，`delete` 不出现在 schema 里 |
-| 4 | `ToolResult` 契约 + **禁止 throw**（§5.2） | `types` + `plugin-tools` | `check-tools.ts` 的失败路径单测断言 |
-| 5 | 输出驱逐到 `/artifacts/` + `CompositeBackend` 式路由（内外部隔离） | `plugin-context` + `plugin-fs` | 项目目录里不出现 harness 内部文件 |
-| 6 | `ctx.skills`（L1/L2/L3 + 多源优先级 + trust 分级 + `skills/activated` 事件） | 新包 `plugin-skills` | 已有 Agent Skills 目录零改动可用 |
-| 7 | `ctx.planning`（`write_todos`，**opt-in**，带状态） | 新包 `plugin-planning` | 默认 core profile **不含**它 |
-| 8 | `.agentic/{tools,skills,commands,mcp.json}` 约定目录 + `trust` 开关 | `core` + `cli` | 未 trust 的仓库里不自动加载任何代码 |
-| 9 | `check-tools.ts` + `check-skills.ts` | `scripts/` | CI 阻断 |
+| 1 | **sandbox 契约 + `native` 后端（macOS Seatbelt / Linux bwrap）+ `fakeSandbox`**；`probe()` 报 capabilities，`openFs()`/`openShell()` 能派生后端 | ★ 新包 `@agentic/sandbox` + `@agentic/plugin-sandbox` | `check-sandbox.ts` 通过；无可用后端时 **`bash` 不在模型面上**（fail-closed，而不是调了才报错） |
+| 2 | `ctx.fs` 接口改成七方法形状 + `capabilities`；实现 `StateFs` / `LocalFs(virtual_mode)`，**默认 provider 由 sandbox 派生** | `plugin-fs` | 单测 + 换 backend 不改工具名即可跑通；**换 container 后端后 `read_file` 与 `bash` 看见同一个世界** |
+| 3 | 内置 7+1 工具，命名对齐（§2.2），Consumer 薄壳 | `plugin-fs` / `plugin-subprocess` / `plugin-teams` | `createReactAgent()` 零配置能读写改列搜 |
+| 4 | **能力探测隐面**：`requires` → 装配时过滤（数据源＝各 provider 的 `capabilities`，含 sandbox 的 `probe()`） | `plugin-tools` | 给不支持 delete 的 backend 时，`delete` 不出现在 schema 里 |
+| 5 | `ToolResult` 契约 + **禁止 throw**（§5.2） | `types` + `plugin-tools` | `check-tools.ts` 的失败路径单测断言 |
+| 6 | 输出驱逐到 `/artifacts/` + `CompositeBackend` 式路由（内外部隔离） | `plugin-context` + `plugin-fs` | 项目目录里不出现 harness 内部文件 |
+| 7 | `ctx.skills`（L1/L2/L3 + 多源优先级 + trust 分级 + `skills/activated` 事件） | 新包 `plugin-skills` | 已有 Agent Skills 目录零改动可用 |
+| 8 | `ctx.planning`（`write_todos`，**opt-in**，带状态） | 新包 `plugin-planning` | 默认 core profile **不含**它 |
+| 9 | `.agentic/{tools,skills,commands,mcp.json,sandbox.json}` 约定目录 + `trust` 开关 | `core` + `cli` | 未 trust 的仓库里不自动加载任何代码；但 **`sandbox.json` 是收紧不是放权，不需 trust** |
+| 10 | `check-tools.ts` + `check-skills.ts` + `check-sandbox.ts` | `scripts/` | CI 阻断 |
 
-> 第 6、7 两项是**新增包**，第 8 项是**新增顶层约定**——这是本次目录结构必须更新的原因，见下。
+> 三类目录变更是本轮造成的：第 1 项是**新增包组**（sandbox 四个包）、第 7/8 项是**新增包**、第 9 项是**新增顶层约定**——这是目录结构必须更新的原因，见下。
+> ⚠️ **为什么 sandbox 拍在第 1 位而不是最后**：它卡着 `bash` 能不能上面上、以及所有文件工具看见哪个世界。先做内置工具后补沙箱，会先训练出一批"假定无笼子"的行为与测试，返工成本最高。
 
 ---
 
-## 7. 需要你拍板的 4 个点
+## 7. 四个拍板点（**v2.4 已全部采纳建议值**）
 
 1. **内置工具改名**（`fs_read` → `read_file` 等，§2.2）：我建议改。这会同步修正 `ARCHITECTURE.md` 的 seam 表与示例。
 2. **`task` 算不算 core 的第 8 个工具**：算 → 多 agent 开箱可用但子 agent 成本不可见；不算 → core 收到 7 个，`task` 归 teams opt-in。**我倾向"算，但默认预算封顶"**（子 agent 共享父预算且单列）。
 3. **skills 规模墙阈值 30** 是否合适（Deep Agents 的观测是 ~150 才开始退化）；越低越省 token，但预筛会引入召回误差。**建议一期 30，二期用 evals 数据调。**
 4. **`toolFromFunction`（签名 + JSDoc 推 schema）是否对外公开**：我建议**公开但文档标注"不建议用于对外发布的关键工具"**（理由见 §4 末尾）。
+
+> 另有 4 个属于沙箱的待拍板点（默认档位 / 逃生舱 / 容器是否进一期 / CoW 工作区视图是否一期就抽象），列在 [SANDBOX.md](./SANDBOX.md) §8。
+>
+> ✅ **定稿结果（逐条）**：1 改名为 `read_file`/`write_file`/`edit_file`/`bash`（已同步修正 `ARCHITECTURE.md` 与 `PROJECT_STRUCTURE.md`）；2 `task` 算第 8 个，默认预算封顶；3 规模墙 30；4 `toolFromFunction` 公开但不推荐。
 
 ---
 

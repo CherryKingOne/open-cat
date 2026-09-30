@@ -2,7 +2,7 @@
 
 > 回答你的三点：**Tools 用 function calling 还是别的方式定义？Agent / Workflow 各自的专业导入路径怎么分？多 Agent 与 Workflow 案例给哪些？**
 > （内置工具开箱可用 / Skills / 写死 vs 继承 / 工具格式定稿 —— 这四问在 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md)，本文只保留与之一致的契约面）
-> 配套：[ARCHITECTURE.md](./ARCHITECTURE.md) §3 seam、[LOOP_ENGINEERING.md](./LOOP_ENGINEERING.md)、[REPO_INTELLIGENCE.md](./REPO_INTELLIGENCE.md)、[HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)
+> 配套：[ARCHITECTURE.md](./ARCHITECTURE.md) §3 seam、[LOOP_ENGINEERING.md](./LOOP_ENGINEERING.md)、[REPO_INTELLIGENCE.md](./REPO_INTELLIGENCE.md)、[HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)、[SANDBOX.md](./SANDBOX.md)
 
 ---
 
@@ -61,7 +61,7 @@ export const searchOrders = defineTool({
 |---|---|---|---|
 | **A. Function calling**（原生 tool use） | 模型输出结构化 `tool_calls`，harness 执行 | 离散、参数明确、需审计的能力 | `ctx.tools` 主路径，**默认选择** |
 | **B. MCP** | 外部 server 提供 tools/resources/prompts | 第三方集成、跨语言、非自己维护的能力 | `plugin-mcp` → 同样注册进 `ctx.tools` |
-| **C. Code-as-action**（让模型写代码来编排能力） | 模型在沙箱里写 TS/Python，调用 SDK 而非逐个 tool | 循环/批量/数据变换类任务——用 function calling 表达会退化成"几十次调用" | `plugin-sandbox` + `run_script` 单工具（二期，但对 Coding Agent 收益极大） |
+| **C. Code-as-action**（让模型写代码来编排能力） | 模型在沙箱里写 TS/Python，调用 SDK 而非逐个 tool | 循环/批量/数据变换类任务——用 function calling 表达会退化成"几十次调用" | `plugin-sandbox` + `run_script` 单工具。**沙箱提到一期后这条路提前有条件地可行**：只在 `native`/`container` 后端就位时上面上，`sandbox: 'off'` 时该工具**不在模型面上**（见 SANDBOX.md §5.2 / §7） |
 | **D. Commands**（人工触发，**不过模型 turn**） | 注册进 `ctx.commands`，dispatch 不产生 turn | 明确操作、零不确定性、省钱 | `/deploy`、MCP prompts 映射 |
 | **E. Skills**（纯提示型能力包，**零代码**） | 目录 + `SKILL.md`：L1 元数据进 system prompt，L2 由模型自己 `read_file` 读正文 | 方法论 / 流程 / 领域知识；"要新知识不要新逻辑" | `ctx.skills`（`plugin-skills`）——**不新增机制，L2 就是内置的 `read_file`** |
 
@@ -117,6 +117,12 @@ import type { FsBackend, ShellBackend, LlmAdapter }        from '@agentic/types'
 // 内置工具 ls/read_file/write_file/edit_file/glob/grep/bash(/task) **不需要 import**，由 profile 装配
 import { openai }                                          from '@agentic/provider-openai';   // 或 '@agentic/plugin-llm/openai'
 
+// ── 沙箱（既可给 agent 用，也可脱离 agent 自己当执行环境）───────
+import { nativeSandbox, defineSandboxPolicy }               from '@agentic/sandbox';
+import { containerSandbox }                                 from '@agentic/sandbox/container';
+import { createSandbox }                                    from '@agentic/sandbox';       // ★ 单独用：await using sbx = await createSandbox(...)
+import { fakeSandbox }                                      from '@agentic/sandbox/testing'; // 单测里替掉真笼子
+
 // ── ② Workflow surface ──────────────────────────────────────
 import { defineWorkflow, sequence, parallel, branch, loop, step } from '@agentic/workflow';
 import { human, checkpoint, retry, compensate }                   from '@agentic/workflow/operators';
@@ -156,6 +162,8 @@ import { ReactAgentImpl } from '@agentic/plugin-agent-loop-react/internal'; // �
 | `@agentic/plugin-*` | 各自 `pluginX` + 该能力的公共类型 | 通常无子路径（保持"一个能力一个包"的纯粹性）；**例外：`@agentic/plugin-tools/operators`（`with*` 装饰器）** | 
 | `@agentic/plugin-tools` | `defineTool` `ok` `fail` `ToolResult` | `/operators`（withGuards/withRetry/withCache）——★ 这是"不做基类但保留少写重复"的唯一对外装饰面 |
 | `@agentic/plugin-fs` | `pluginFs` + 内置文件工具装配 | `/backends`（`StateFs`/`LocalFs`，供用户实现 `FsBackend` 时复用受限模式） |
+| `@agentic/sandbox` | ★ `SandboxBackend` 契约 + `defineSandboxPolicy` + `probe()` + `createSandbox` | `/native`（Seatbelt/bwrap/Win）、`/container`（docker/podman）、`/remote`（e2b/daytona/modal，二期）、`/iso`（CoW 工作区视图，二期）、`/testing`（`fakeSandbox`） |
+| `@agentic/plugin-sandbox` | `pluginSandbox`：ctx.sandbox 装配 + **派生 `ctx.fs` / `ctx.subprocess`** + fail-closed | — |
 | `@agentic/provider-*` | 厂商 provider | — |
 | `@agentic/cli` | bin | — |
 
@@ -179,7 +187,7 @@ import { ReactAgentImpl } from '@agentic/plugin-agent-loop-react/internal'; // �
 
 ## Part 3 案例规划（`examples/` 是你的第二份文档）
 
-SDK 的真实体验在示例里。规划 7 组（A 根 / B 可控 / C 多 Agent / D Workflow / E 项目理解 / F 扩展 / **G 内置工具与技能**），**每组都从"最小可跑"到"有生产语义"**，并明确各自演示哪条设计纪律。
+SDK 的真实体验在示例里。规划 8 组（A 根 / B 可控 / C 多 Agent / D Workflow / E 项目理解 / F 扩展 / **G 内置工具与技能** / **H 沙箱**），**每组都从"最小可跑"到"有生产语义"**，并明确各自演示哪条设计纪律。
 
 ### A. Agent 基础（6 个）
 
@@ -249,11 +257,25 @@ SDK 的真实体验在示例里。规划 7 组（A 根 / B 可控 / C 多 Agent 
 | G6 | `65-wrap-a-backend` | ★ 用 `withGuards` / 实现 `FsBackend` 包装而非继承基类（T2 扩展点） |
 | G7 | `66-edit-file-failure` | 失败可行动：`NOT_UNIQUE` / `NOT_FOUND` 的回填文本→模型自己改，**全程无 throw** |
 
+### H. 沙箱（7 个，对应 [SANDBOX.md](./SANDBOX.md)）
+
+| # | 案例 | 演示要点 |
+|---|---|---|
+| H1 | `70-native-workspace-write` | 一行声明笼子：`sandbox: 'native:workspace-write'`——bash 能写工作区但写不了宿主 |
+| H2 | `71-deny-is-absence` | ★ deny `~/.ssh` → 目录直接"缺席"（tmpfs / 不 bind）而不是 EACCES；**`read_file` 与 `cat` 给出同一个答案** |
+| H3 | `72-capability-hides-bash` | `probe()` 探不到 shell → `bash` 从 schema 消失（不是调了才报错）；与 G2 同一机制的不同 seam |
+| H4 | `73-net-proxy-allowlist` | 网络独立一面：default deny + npm registry 白名单；首次新域名 → 一次 approve（**非静默**） |
+| H5 | `74-fail-closed-doctor` | 依赖缺失 → 装配失败 + 列出"没过哪道门"；`agentic doctor` 打印 SandboxReport 与**实际生效等级** |
+| H6 | `75-sandbox-derives-fs` | ★ 换 container 后端 → `read_file` 与 `bash` **一起**进容器（不会出现"容器里 cat 空、工具却读到内容"的语义分裂） |
+| H7 | `76-escalation-request` | 被拦 → 违规信息回传模型 → 走 `approve` Submission 通道请求升权（升权词汇封闭，非扩权不打扰人） |
+
+> H2 与 H6 是这组里最值得先看的两个：它们共同证明"沙箱不是一个工具的实现细节，而是**整个执行世界的边界**"——这也是我们把 `ctx.fs`/`ctx.subprocess` 默认 provider 交给 sandbox 派生的原因（SANDBOX.md §4.1）。
+
 ---
 
 ## Part 4 留给你的四个判断
 
 1. **`@agentic/workflow` 与 `@agentic/teams` 是否独立成包**：独立则 surface 清晰（推荐），代价是多两个发布单元与版本轴。**建议独立。**
-2. **Code-as-action（通道 C）是否一期做**：它对 Coding Agent 价值极高，但要求 `plugin-sandbox` 先落地。**建议二期，一期在文档里预留通道。**
+2. **Code-as-action（通道 C）是否一期做**：它对 Coding Agent 价值极高，但要求 `plugin-sandbox` 先落地。**沙箱已提到一期（SANDBOX.md §7），所以本条从"二期做"改成"一期做有条件版本"**：先上 `run_script`（仅 `native`/`container`），但不做 MITM、不做语言运行时隔离。
 3. **示例的运行形态**：纯代码示例（`bun run`）vs 每例配一个 `.env.example` + 一个 mock provider（可离线跑、可当回归测试）。**建议后者**——尤其 B3 的假 provider，它同时是限流逻辑的唯一可靠测试资产。
 4. **内置工具的命名与是否允许用户从面上摘除**：改名（`fs_read` → `read_file`）与 `task` 是否算第 8 个，两条都会写进对外契约且以后改不动。详见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §7，那里还有 skills 规模墙与 `toolFromFunction` 是否公开两个待拍板点。

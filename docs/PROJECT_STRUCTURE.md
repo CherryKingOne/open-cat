@@ -1,9 +1,9 @@
 # 项目目录结构规划（agentic · Harness 版）
 
-> 状态：**规划稿 v2.2，待评审**（v1 扁平 SDK 包结构；v2 按 [ARCHITECTURE.md](./ARCHITECTURE.md) 的微内核 + 插件重构；v2.1 回填 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md) 的 12 项借鉴；**v2.2 回填 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md)：内置原子工具、Skills、能力探测隐面、`templates/.agentic/` 约定，见 §6.2**）。
+> 状态：**v2.4 已定稿，进入实施**（v1 扁平 SDK 包结构；v2 按 [ARCHITECTURE.md](./ARCHITECTURE.md) 的微内核 + 插件重构；v2.1 回填 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md) 的 12 项借鉴；v2.2 回填 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md)；v2.3 回填 [SANDBOX.md](./SANDBOX.md)；**v2.4：§7 的 11 个拍板点全部按建议值定稿，见 [ARCHITECTURE.md](./ARCHITECTURE.md) §9**）。
 > 定位：基于 **Bun** 手动自定义开发的 **Agent Harness**，Agent 创建入口唯一为 **`createReactAgent()`**，面向对外开放与 SDK 生成。
 > 设计参照：DeepSeek Harness（dsh）/ Cordis —— "一切皆插件"，没有需要打补丁的特权内核。
-> **只出文档，不写代码。结构不合适处请直接批注。**
+> 早期为纯设计稿（只出文档不写代码）；**v2.4 起本文与 [ARCHITECTURE.md](./ARCHITECTURE.md) 同为工程约束，代码按 §8 顺序从此衍生**。实现与本文不一致时，以代码 + CI 断言为准，并回头修本文。
 
 ---
 
@@ -51,6 +51,7 @@ agentic/
 │   ├── SDK_SURFACE.md                # ★ Tools 定义、五种能力通道（含 Skills）、三 surface 导入路径、案例规划
 │   ├── HARNESS_CASE_STUDIES.md        # ★ dsh / pi / Codex / 回退系对比与我们的取舍裁决
 │   ├── BUILTIN_TOOLS.md               # ★ 内置原子工具、Skills、工具格式契约（Deep Agents 调研）
+│   ├── SANDBOX.md                     # ★ 沙箱：各家怎么实现 + 我们的沙箱 SDK（Codex / Claude Code / letta / dsh / 云端厂商）
 │   ├── SEAM_CATALOG.md               # seam 清单（Definition/Provider/Consumer 三列）
 │   ├── EVENT_MAP.md                  # 事件全集 + producer/consumer + durable/live 标记
 │   ├── SDK_GUIDE.md                  # 对外使用指南
@@ -131,7 +132,8 @@ agentic/
 │   │   │           ├── stdio.ts        # Bun.spawn + 换行分帧 + 进程树回收（Windows taskkill /T）
 │   │   │           ├── http.ts         # Streamable HTTP + Mcp-Session-Id
 │   │   │           └── remote.ts       # mcp-remote 代理（legacy SSE）
-│   │   ├── policy/                     # ★ @agentic/plugin-policy —— ctx.policy + tools/pre-execute 的 ask/deny
+│   │   ├── policy/                     # ★ @agentic/plugin-policy —— ctx.policy + tools/pre-execute 的 ask/deny + **sensitive-file-rules.ts**（kimi 式硬过滤：.env / id_* / credentials / .pem|.key|.old）
+│   │   ├── sandbox/                    # ★ @agentic/plugin-sandbox —— ctx.sandbox 装配：**派生** ctx.fs 与 ctx.subprocess（一个换、两个跟着换）+ `sandbox/probe` durable 事件 + **fail-closed 默认**
 │   │   ├── workflow/                   # ★ @agentic/plugin-workflow —— 在 ctx.agentLoop 之上的编排 provider（不新建运行时）
 │   │   │   └── src/{index,sequence,parallel,branch,loop,nodes,operators/{retry,human,checkpoint,compensate}}.ts
 │   │   ├── teams/                      # ★ @agentic/plugin-teams —— 多 Agent：roster + 任务板 + mailbox（opt-in seam）
@@ -145,6 +147,15 @@ agentic/
 │   │   ├── openai/                     # @agentic/provider-openai（同时覆盖 OpenAI 兼容端点）
 │   │   ├── anthropic/                  # @agentic/provider-anthropic
 │   │   └── ollama/                     # @agentic/provider-ollama
+│   │
+│   ├── sandbox/                      # ★ @agentic/sandbox（一期）—— 沙箱契约 + native 后端，**零厂商依赖**
+│   │   ├── src/{index,backend,policy,capabilities,probe,net-proxy}.ts   # SandboxBackend / defineSandboxPolicy（策略即数据，可进 dumpConfig）/ 本地 HTTP CONNECT 代理
+│   │   ├── src/native/{seatbelt,bwrap,windows,argv}.ts   # SBPL 模板参数化路径 / bwrap 挂载序（--tmpfs 遮蔽＝缺席，--die-with-parent，carve-out 不得为 deny 祖先）/ 一期引导 WSL2 或 container / argv 优先不拼 shell
+│   │   ├── src/policies/*.sbpl.tpl   # 2×3 矩阵：permissive|restrictive × open|closed|proxied（形状抄 qwen-code，模板可单测快照）
+│   │   └── src/testing/fake-sandbox.ts  # ★ CI 用假后端（probe 报告可注入，不依赖真 OS）
+│   ├── sandbox-container/            # @agentic/sandbox-container（一期建议）—— docker/podman；会话级复用；默认 --network none --memory --cpus --cap-drop ALL
+│   ├── sandbox-remote/               # @agentic/sandbox-remote（**二期**）—— e2b（互操作轴）/ daytona / modal adapter + **world 级 snapshot/hydrate**
+│   ├── sandbox-iso/                  # @agentic/sandbox-iso（**二期**）—— B 类 CoW 工作区视图：APFS clonefile / overlayfs / btrfs / reflink / ProjFS / worktree 兜底
 │   │
 │   ├── bundles/                        # ★ 可分发组合包（bundle = 插件集 + 配置行）
 │   │   ├── standard/                   # @agentic/bundle-standard —— session+llm+tools+loop+prompt+policy
@@ -164,7 +175,7 @@ agentic/
 │   ├── sdk-minimal/    # 单 bundle 全显式树，不含 MCP，冷启动最快
 │   ├── core8/          # ★ 零配置默认面：ls/read_file/write_file/edit_file/glob/grep/bash + task（=8，受 check-surface 断言）
 │   ├── coding/         # ★ core8 + skills + planning + repo-intel（预算另立 ≤ 14）
-│   ├── scout/          # ★ 只读模式：无任何写工具/无对外发消息（bash 由能力探测直接隐藏）
+│   ├── scout/          # ★ 只读模式：无任何写工具/无对外发消息；笼子＝read-only，`bash` 仍在面上但只能跑白名单只读命令
 │   ├── cli/            # sdk + repl + commands
 │   └── headless/       # sdk + one-shot runner，不起服务，供 CI/脚本
 │
@@ -173,6 +184,8 @@ agentic/
 │       ├── tools/example.ts          # 进程内自定义工具（defineTool 默认导出；默认不自动加载，需 trust）
 │       ├── skills/example-skill/SKILL.md  # 技能：frontmatter(name/description) + 正文(< 5000 token) + scripts|references
 │       ├── commands/precommit.md     # 人工斜杠命令（不过模型 turn）
+│       ├── sandbox.json              # ★ 沙箱策略（mode/filesystem/network/limits/escalation）——与 mcp.json 同级的对外约定面
+│       ├── sandbox.Dockerfile        # 项目自定义容器镜像（可选；FROM agentic-sandbox，形状抄 .gemini/sandbox.Dockerfile）
 │       ├── mcp.json                  # MCP 声明（见 MCP_INTEGRATION）
 │       └── AGENTS.md                 # 项目知识与约定（进 git、可 review）
 │
@@ -210,7 +223,7 @@ agentic/
 │   ├── F-extensibility/              # ★ 一切皆插件的证据
 │       ├── 50-write-a-plugin/        # 30 行替换一个能力，不 fork 代码
 │       └── 51-effect-cleanup/        # dispose() 逆序回滚：子进程/定时器/监听器全回收
-│   └── G-tools-skills/               # ★ 内置工具与技能（BUILTIN_TOOLS）
+│   ├── G-tools-skills/               # ★ 内置工具与技能（BUILTIN_TOOLS）
 │       ├── 60-zero-config-builtin/   # ★ 不传一个 tool，拿到 8 个原子工具就能改仓库
 │       ├── 61-capability-hiding/     # 不支持 delete 的 backend → `delete` 从 schema 里消失
 │       ├── 62-artifact-offload/      # 大结果 → /artifacts/ → 模型自己 read_file(offset,limit) 读回
@@ -218,6 +231,14 @@ agentic/
 │       ├── 64-custom-tool-in-process/ # .agentic/tools/*.ts（含 trust 开关）
 │       ├── 65-wrap-a-backend/        # ★ withGuards / wrapFs：装饰而非继承类（T2 扩展点）
 │       └── 66-edit-file-failure/     # 失败可行动：NOT_UNIQUE / NOT_FOUND 的回填文本
+│   └── H-sandbox/                    # ★ 沙箱（SANDBOX）
+│       ├── 70-native-workspace-write/ # ★ 一行声明笼子：`sandbox: 'native:workspace-write'`，bash 能写工作区但写不了宿主
+│       ├── 71-deny-is-absence/       # deny ~/.ssh → 目录直接“缺席”（tmpfs / 不 bind），而不是 EACCES；read_file 与 cat 答案一致
+│       ├── 72-capability-hides-bash/ # probe 探不到 shell → bash 从 schema 消失（不是调了才报错）
+│       ├── 73-net-proxy-allowlist/   # default deny + npm registry 白名单；首次新域名 → 一次 approve（非静默）
+│       ├── 74-fail-closed-doctor/    # 依赖缺失 → 装配失败 + 列出“没过哪道门”；`doctor` 打印 SandboxReport
+│       ├── 75-sandbox-derives-fs/    # ★ 换 container 后端 → read_file 与 bash 一起进容器（不会出现语义分裂）
+│       └── 76-escalation-request/    # 被拦 → 违规信息回传模型 → 走 approve 通道请求升权（封闭词汇、非扩权不打扰人）
 │
 ├── scripts/                          # ★ 规范守门（这些校验脚本是 SDK 质量的地基，不能省）
 │   ├── check-exports.ts              # exports 字段 ⇄ src/index.ts 导出面一致；internal 不外泄
@@ -227,6 +248,7 @@ agentic/
 │   ├── check-surface.ts              # ★ profile 能力面断言：core profile 工具数 ≤ 8、system prompt token ≤ 1.2k
 │   ├── check-tools.ts                # ★ 工具契约：命名正则/内置名白名单/strict schema/每个工具至少一条 ok:false 路径
 │   ├── check-skills.ts               # ★ SKILL.md：frontmatter 合法/正文 <5000 token/路径必为“含技能目录的目录”
+│   ├── check-sandbox.ts              # ★ 沙箱守门：策略覆盖算法三条/carve-out 不得为 deny 祖先/fail-closed 为默认/SBPL 与 bwrap 参数生成快照/敏感文件规则表
 │   ├── verify-event-map.ts           # EVENT_MAP 与 types/events.ts 一致
 │   └── release.ts                    # 版本一致性 + build + publish
 │
@@ -249,6 +271,10 @@ agentic/
 | `@agentic/plugin-skills` | ★ ctx.skills：Agent Skills 规范的发现 / 分级 / 命中事件 | ✅ | plugin-fs, types |
 | `@agentic/plugin-planning` | ctx.planning：`write_todos`（**opt-in**，不入 core 工具面） | ✅ | kernel, types |
 | `@agentic/plugin-checkpoint` | ★ ctx.checkpoints：消息状态与世界状态**双栈一起**原子回滚（影子 git） | ✅ | kernel, types |
+| `@agentic/sandbox` | ★ **沙箱契约 + native 后端**（Seatbelt/bwrap/probe/策略/假后端），零厂商依赖；可**单独 import 当执行环境用** | ✅ | types |
+| `@agentic/plugin-sandbox` | ★ ctx.sandbox 装配：**派生 ctx.fs 与 ctx.subprocess** + `sandbox/probe` 事件 + fail-closed | ✅ | sandbox, kernel, types |
+| `@agentic/sandbox-container` | docker/podman 后端（会话复用 + 资源上限）——一期建议 | ✅ | sandbox |
+| `@agentic/sandbox-remote` / `-iso` | 二期：e2b/daytona/modal 适配 + world 级快照 / CoW 工作区视图 | ✅（二期） | sandbox |
 | `@agentic/provider-*` | llm seam 的厂商实现 | ✅ | types, plugin-llm |
 | `@agentic/bundle-*` | 插件 + 配置行的组合包 | ✅ | 对应 plugins |
 | `@agentic/cli` | 启动器 + dump-config/inspect/mcp 子命令 | ✅ | core, bundles |
@@ -269,9 +295,18 @@ T2 装饰   →  import { withGuards, withRetry, withCache }  from '@agentic/plu
 T2 换后端 →  import type { FsBackend, ShellBackend }       from '@agentic/types'
 T3 策略   →  import { defineProfile }                     from '@agentic/core'   // patch ctx.fs / ctx.subprocess 的 provider
 约定加载 →  .agentic/tools/*.ts（默认关闭，需 trust） + .agentic/skills/<name>/SKILL.md（零代码）
+
+── 沙箱（可给 agent 用，也可自己拿来当执行环境，见 SANDBOX.md §5）──
+给 agent  →  import { nativeSandbox }  from '@agentic/sandbox/native'
+                createReactAgent({ profile: 'core8', sandbox: nativeSandbox({ mode: 'workspace-write', deny: ['~/.ssh'] }) })
+                或简写 sandbox: 'native:workspace-write'   // 字符串简写也要能在 dumpConfig() 里展开
+单独使用 →  import { createSandbox }  from '@agentic/sandbox'          // create* → 必 dispose
+                import { containerSandbox } from '@agentic/sandbox/container'
+契约与策略 → import { defineSandboxPolicy } from '@agentic/sandbox'   + type SandboxBackend from '@agentic/sandbox'
+测试     →  import { fakeSandbox }      from '@agentic/sandbox/testing'   // 不依赖真 OS 的 CI 资产
 ```
 
-> **内置工具不需要 import**：`ls/read_file/write_file/edit_file/glob/grep/bash(+task)` 由 profile 装配时自动挂上，用户 `createReactAgent()` 后直接可用——这是第 1 问「基础工具无需手动定义」的落点，也是 `profiles/core8` 存在的全部理由。
+> **内置工具不需要 import**：`ls/read_file/write_file/edit_file/glob/grep/bash(+task)` 由 profile 装配时自动挂上，用户 `createReactAgent()` 后直接可用——这是第 1 问「基础工具无需手动定义」的落点，也是 `profiles/core8` 存在的全部理由。**沙箱同理：不声明就有默认档（`workspace-write`），声明只是换档。**
 
 命名动词铁律（比目录结构更容易失守的地方）：`createX()` = 有生命周期、要 `dispose()`；`defineX()` = 无副作用、可序列化、可复用；`withX()` = 装饰；`on(event)` = 订阅并返回 `Disposable`。
 
@@ -405,11 +440,37 @@ agent.dispose();                                // 全树 effect 逆序回滚，
 
 ---
 
-## 7. 需要你拍板的点（按影响大小排序）
+### 6.3 v2.3：沙箱回填（出处见 SANDBOX.md）
 
-1. **包粒度**：一期 plugin 独立多包（结构最纯，包数 ~18） vs 单包多子路径 `@agentic/plugins/*`（包少、发布简单，但"移除一个能力"不够干净）。**我倾向独立多包**，但这直接决定工作量与发布复杂度，需要你定。
-2. **一期能力集**：`ARCHITECTURE.md` §3 建议必做 7 个 seam（llm/tools/agentLoop/sessions/systemPrompt/mcp/policy）。若一期就要做代码类 Agent，`fs/subprocess/sandbox` 必须提前——**要不要提前？**
-3. **内置工具归属**（v2.2 已给建议，待你确认）：**工具跟着能力走** —— `ls/read_file/write_file/edit_file/glob/grep` 归 `plugin-fs`、`bash` 归 `plugin-subprocess`、`task` 归 `plugin-teams`，`plugin-tools` 只留注册表/管线/装饰器（否则 seam 的 Consumer 角色会被拆散）。剩下的真问题只两个：是否允许用户把内置工具从面上摘除（我的答案：**允许摘、不允许改名**，改名会破坏模型先验），以及无沙箱时 `bash` 默认是否在面上（见 HARNESS_CASE_STUDIES §6-2）。
+| 变更 | 类型 | 出处 |
+|---|---|---|
+| `sandbox` 从二期**提到一期**（只做 `native`） | ➕ 范围变更 | `bash` 能否安全上面的前提 |
+| 新增包 `@agentic/sandbox`（契约 + native + /testing） | ➕ | Claude Code 的 `@anthropic-ai/sandbox-runtime` 是现成参照物 |
+| 新增包 `sandbox-container` / `sandbox-remote` / `sandbox-iso` | ➕ | gemini-cli 六后端 / E2B 事实标准 / oh-my-pi `pi-iso` 8 后端 |
+| ★ **裁决：sandbox 派生 `ctx.fs` 与 `ctx.subprocess`**（而不是另开一套工具） | 🔒 设计裁决 | 避免“bash 在容器里、read_file 读宿主”的语义分裂 |
+| **两种正交隔离分开建模**：`sandbox`（能碰什么）vs `checkpoints`/`worktree`（落在哪里） | 🔒 设计裁决 | “7 大开源 Agent 安全篇”：dsh/omp 的语义根本不是一回事 |
+| `probe()` + `SandboxReport` + `sandbox/probe` durable 事件 | ➕ `plugin-sandbox` | letta “先跑探针再收紧”；我们补“事实必须可回放” |
+| **fail-closed 为默认**（不静默降级），降级需显式写且进 log | 🔒 硬约束 | Codex/dsh fail-closed vs Claude Code 默认降级 |
+| `deny` 语义＝**目录缺席**（tmpfs / 不 bind），不是 EACCES | 🔧 `native/*` | letta `--tmpfs`：“不可写”等于递一张“秘密在此”的地图 |
+| 策略覆盖算法三条 + carve-out 不得为 deny 祖先的**装配期断言** | 🔒 硬约束 | bwrap last-mount-wins 静默暴露；Claude Code “deny 在宽 allow 内仍生效” |
+| 网络单独一面：`none`/`proxy`（域名白名单 + 本地 CONNECT 代理）+ `<network>` 段进 prompt | ➕ `sandbox/net-proxy.ts` | Codex `network-proxy`（MITM 与凭据注入→二期） |
+| **敏感文件硬过滤**进 `plugin-policy`（一期就做，与 OS 沙箱正交） | ➕ | kimi `tools/policies/sensitive.ts`（便宜、有效、能直接拿来用） |
+| 升权：`allowUnsandboxed` 默认 **false**；走 `approve` Submission 通道；封闭词汇 `granted\|denied\|cancelled\|unavailable` | 🔒 硬约束 | Claude Code 逃生舱太软 + dsh 升权词汇 |
+| 哨兵 env `AGENTIC_SANDBOX=1` 防嵌套重入；`--die-with-parent` + Windows 进程树回收 | 🔧 `plugin-sandbox` / `mcp/transport/stdio` | letta；复用现有实现不写两遍 |
+| `capabilities.snapshot` 接入 `checkpoints` 的 `messages\|workspace\|world` 三档 scope | 🔧 `plugin-checkpoint` | “续跑是沙箱价值的一半”（各家共识） |
+| 顶层新增 `templates/dot-agentic/{sandbox.json,sandbox.Dockerfile}` | ➕ | 与 `mcp.json` 同级的对外约定面；`.gemini/sandbox.Dockerfile` |
+| profiles 绑定沙箱默认档（sdk/core8=`workspace-write`、scout=`read-only`、headless=容器） | 🔧 `profiles/*` | letta “按数据敏感度给不同默认值” |
+| examples 新增 **H-sandbox** 组 7 例（70–76） | ➕ | 把“隔离到底隔了什么”变成可跑的样例 |
+| 守门脚本 9 → **10 个**（`check-sandbox.ts`） | ➕ | 策略与参数生成必须靠断言，不靠文档 |
+| 明确 **Windows 本机一期无 OS 沙箱**（走 WSL2 或 Docker）；写进 `SECURITY.md` | ⚠️ 诚实边界 | opencode “声明不提供什么”范本；Codex 拒 WSL1 |
+
+---
+
+## 7. 拍板点（**v2.4 全部已定：均按各项括号里的建议值采纳**，逐条裁决见 [ARCHITECTURE.md](./ARCHITECTURE.md) §9）
+
+1. **包粒度**：一期 plugin 独立多包（结构最纯，包数 ~23） vs 单包多子路径 `@agentic/plugins/*`（包少、发布简单，但"移除一个能力"不够干净）。**我倾向独立多包**，但这直接决定工作量与发布复杂度，需要你定。
+2. **一期能力集**：`ARCHITECTURE.md` §3 的 7 个必做 seam 之外，`fs` / `subprocess` / `sandbox`（native 档）/ `skills` / `planning` 已因“内置工具零配置 + 沙箱”提为一期——**要不要再加东西？（我的建议：不加，一期就到这里）**
+3. **内置工具归属**（v2.2 已给建议，待你确认）：**工具跟着能力走** —— `ls/read_file/write_file/edit_file/glob/grep` 归 `plugin-fs`、`bash` 归 `plugin-subprocess`、`task` 归 `plugin-teams`，`plugin-tools` 只留注册表/管线/装饰器（否则 seam 的 Consumer 角色会被拆散）。剩下的真问题只两个：是否允许用户把内置工具从面上摘除（我的答案：**允许摘、不允许改名**，改名会破坏模型先验），以及**无沙箱时 `bash` 默认是否在面上**——v2.3 已给答案：**不在**（fail-closed，`capabilities.shell` 探不到就直接隐面，见 SANDBOX.md §4.4）。
 4. **Session log 一期必做？**（不做则无 fork/resume/审计，也失去"模型可见=已记录"这条最有价值的不变量）**强烈建议做，JSONL 即可。**
 5. **MCP 一期包官方 SDK 还是自研最小客户端？**（见 MCP_INTEGRATION §11-1）
 6. **是否现在预留 `evals/`**：harness 的价值主张就是"同模型换 harness 分数不同"，没有评测目录就无法证明设计有效。**建议一期就建 `evals/`（哪怕只有 3 个用例）。**
@@ -417,14 +478,17 @@ agent.dispose();                                // 全树 effect 逆序回滚，
 8. **scope 名**：`@agentic/*` npm 可用性待核。
 9. **v2.1 新增的 4 个取舍**：`ctx.checkpoints` 一期是否必做（我建议必做，否则 fork/并行不成立）、session 树一期开多少、三道闸默认强度（allow-all vs workspace-write）、worktree 是否作为 teams 默认隔离单位——**详见 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md) §7**。
 10. **v2.2 新增的 4 个取舍**：内置工具改名（`fs_read` → `read_file`，我建议改）、`task` 是否算 core 第 8 个工具、skills 规模墙阈值（建议 30）、`toolFromFunction` 是否对外公开——**详见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §7**。
+11. **v2.3 新增的 4 个取舍**：沙箱默认档（我建议 `workspace-write` + fail-closed）、升权逃生舱默认关还是默认开（我建议**关**）、容器后端是否进一期（我建议**进**，否则你在 Windows 本机无法验证）、`WorkspaceView` 接口是否一期就抽象出来（我建议**是**，否则 `checkpoints` 与 `teams` 会写成两套）——**详见 [SANDBOX.md](./SANDBOX.md) §8**。
 
 ---
 
-## 8. 下一步（确认结构后）
+## 8. 实施顺序（已开工）
 
-1. 你批注 §7 十个点 → 我改文档定稿
-2. `bun install` + workspaces 骨架 + 9 个守门脚本先跑通（无业务代码）
+1. ~~你批注 §7 十一个点 → 我改文档定稿~~ ✅ 已按建议值定稿（v2.4）
+2. `bun install` + workspaces 骨架 + 10 个守门脚本先跑通（无业务代码）
 3. 内核 `@agentic/kernel` + 其单测（effect 逆序回滚、依赖重启、层级隔离）—— 这是全局地基，必须先绿
-4. `plugin-agent-loop-react` + `plugin-session` + `provider-openai` → 跑通第一个 `createReactAgent().run()`
-5. `plugin-mcp` + `mcp doctor` → 接第一个真实 MCP server
-6. 回头补 `SEAM_CATALOG.md` / `EVENT_MAP.md`（从代码生成，避免手写漂移）
+4. `@agentic/sandbox` 契约 + `native` 后端 + `fakeSandbox`（因为它卡着 `bash` 能不能上面上，**必须在内置工具之前就位**）
+5. `plugin-agent-loop-react` + `plugin-session` + `provider-openai` → 跑通第一个 `createReactAgent().run()`
+6. `plugin-fs` / `plugin-subprocess` 由 sandbox 派生 → 跑通 `examples/70-native-workspace-write`
+7. `plugin-mcp` + `mcp doctor` → 接第一个真实 MCP server
+8. 回头补 `SEAM_CATALOG.md` / `EVENT_MAP.md` / `SECURITY.md`（从代码生成，避免手写漂移）

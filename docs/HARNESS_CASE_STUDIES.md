@@ -165,7 +165,7 @@ pi 的价值不在极简本身，而在于它给出了**极简的理由**，以�
 | 4 | 守门脚本 `check-grepability.ts`：会话文件必须可被 grep/jq 直接读懂；禁止二进制/加密字段进 log | pi 的 grepability 判据 | `scripts/` |
 | 5 | `defineTool` 的**参数校验失败必须回填为 `tool_result(isError)`，禁止 throw 打断循环**（写成硬约束 + 单测） | pi/TypeBox | SDK_SURFACE §1、`plugin-tools` |
 | 6 | 干预动作枚举化：`agent.interrupt()/compact()/rollback()/approve()/shutdown()` 统一走一个 Submission 通道，且每个都落 log | Codex `Op` 枚举 | `plugin-core` 的 `createReactAgent` 返回值 |
-| 7 | 纵深三道闸：policy → fs/world 路径约束 → subprocess argv + 网络开关；passthrough 默认在 `doctor` 里标红 | Codex 四道闸（裁剪版） | ARCHITECTURE §3 的 `world` 插件组 |
+| 7 | 纵深三道闸：policy → fs/world 路径约束 → subprocess argv + 网络开关；passthrough 默认在 `doctor` 里标红〔**v2.3 已补回第四道：OS 沙箱层，升为四道闸**，见 SANDBOX.md §6〕 | Codex 四道闸 | ARCHITECTURE §3 的 `world` 插件组 |
 | 8 | provider 传输降级路径：优先流式 WS，失败回退 SSE/HTTP，且降级落 log | Codex `FallbackToHttp` | `packages/providers/*` |
 | 9 | `profiles/core` 断言：工具数 ≤ 8、system prompt token ≤ 1.2k，CI 失败即阻断 | pi 的三个赌注 | `bundles/`、`scripts/check-surface.ts` |
 | 10 | 仓库根 `AGENTS.md` 写明"resist adding code to kernel"，配 `check-deps.ts` | Codex 治理 | 根目录、`scripts/` |
@@ -192,7 +192,7 @@ pi 的价值不在极简本身，而在于它给出了**极简的理由**，以�
 
 1. **`ctx.checkpoints` 一期是否必做？** 我的判断是**必做**——没有它，`fork`/分支探索/多 agent 并行都不成立（因为它们共享同一个真实世界）。代价是要维护影子 git，有磁盘与性能成本。你若认为一期只做单 agent 线性会话，可以推到二期，但 `parentId` 字段要一期就留好。
 2. **session 树一期还是二期开？** 建议一期落 `parentId` 字段与 `fork` API，UI/CLI 的 `/tree` 导航放二期。
-3. **三道闸的默认强度**：SDK 默认 `allow-all`（开箱能用，文档标红风险）还是默认 `workspace-write`（安全但要配置才能跑通，第一印象差）？我倾向后者 + `doctor` 明确提示如何放开。
+3. **三道闸的默认强度**：SDK 默认 `allow-all`（开箱能用，文档标红风险）还是默认 `workspace-write`（安全但要配置才能跑通，第一印象差）？我倾向后者 + `doctor` 明确提示如何放开。〔v2.3 注：这一条已因沙箱提到一期而自然收敛——**默认 `workspace-write` 笼子 + fail-closed**，`allow-all` 必须显式声明，见 SANDBOX.md §8-1〕
 4. **worktree 是否作为 teams 的默认隔离单位？** 好处是并行不互相污染；成本是对非 git 目录不适用、且需要处理 worktree 生命周期清理。
 
 ---

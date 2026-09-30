@@ -1,7 +1,7 @@
 # Agent Harness 架构设计（基于 dsh / Cordis 思路的移植）
 
-> 状态：**规划稿，待评审**。本文不含实现，只定义骨架、接缝（seam）、事件契约与目录归属。
-> 调研对象：DeepSeek Harness（dsh）+ 其底座 Cordis（论文《A Programming Paradigm for Spatiotemporal Composability》）；第二参照系：pi（badlogic/pi-mono）、OpenAI Codex CLI、会话树/回退系（对比与取舍见 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)）。
+> 状态：**v2.4 已定稿，进入实施**（原规划稿；§9 的 10 组开放问题已全部收敛为工程约束）。本文定义骨架、接缝（seam）、事件契约与目录归属；代码从本文衍生，不一致时以代码 + CI 断言为准。
+> 调研对象：DeepSeek Harness（dsh）+ 其底座 Cordis（论文《A Programming Paradigm for Spatiotemporal Composability》）；第二参照系：pi（badlogic/pi-mono）、OpenAI Codex CLI、会话树/回退系（对比与取舍见 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)）；第三参照系：Deep Agents（工具面与沙箱 provider，见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) / [SANDBOX.md](./SANDBOX.md)）。
 > 我们的项目：**Agent = Model + Harness**，对外是 SDK，入口保持 `createReactAgent()`。
 
 ---
@@ -170,7 +170,7 @@ PENDING → LOADING → ACTIVE → UNLOADING → DISPOSED
 | 规划 | `ctx.planning` | `write(todos)` / `state` （**opt-in**，不入 core 面） | 内存 + log | `write_todos` 工具 |
 | 文件系统 | `ctx.fs` | `ls/read/write/edit/glob/grep/delete?` + `capabilities` + `routes` | 本地 cwd 受限（virtual mode） | `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` |
 | 子进程 | `ctx.subprocess` | `spawn(spec)` / `capabilities` | Bun 子进程 | `bash` 工具 |
-| 沙箱 | `ctx.sandbox` | `wrap(argv): SpawnSpec` | passthrough（**默认在 `doctor` 里标红不安全**） | 被 fs/subprocess 共享 |
+| 沙箱 | `ctx.sandbox` | `probe()` / `openFs()` / `openShell()` / `snapshot()` / `hydrate()` + `capabilities{fs,shell,pty,network,snapshot,resourceLimits}` | **一期：`native`（macOS Seatbelt / Linux bwrap）**；无可用后端时 fail-closed（`bash` 直接不在面上） | 被 `fs` / `subprocess` **派生共享**；`sandbox/probe` 进 log |
 | MCP | `ctx.mcp` | `connect(spec)` / `listTools()` / `callTool()` | 官方 SDK client | `mcp__<server>__<tool>` |
 | 策略 | `ctx.policy` | `decide(action): allow\|deny\|ask` | allow-all（开放可叠加） | waterfall 监听者 |
 | 遥测 | `ctx.telemetry` | `trace/span/metric` | no-op | waterfall + emit 监听者 |
@@ -184,16 +184,18 @@ PENDING → LOADING → ACTIVE → UNLOADING → DISPOSED
 
 > 定义 seam 时不能只看单个工具，要问"它和谁共享执行世界"。这决定了能不能一次替换、全局生效。
 
-**四条来自案例研究与 Deep Agents 的加严**：
+**五条来自案例研究、Deep Agents 与沙箱调研的加严**：
 - **`checkpoints` 必须跨两个状态栈原子回滚**：消息投影 + 世界状态（fs / git / 外部副作用）。只回退消息是幻觉——pi 的 `/tree` 不回退文件，导致「方案 A / 方案 B 平行探索」其实共用一个真实世界，分支结果不可比。
 - **fs / subprocess / sandbox / checkpoints 共享同一个「执行世界」**：把它们一起指向远程沙箱或影子仓库，能力整体搬迁，不为每个工具各 fork 一份。
 - **`inbox` 是对「用户中途插话」这个不确定性的显式回答**：插话不能默默进消息数组，必须先分类（补充说明 / 新任务 / 打断）再落 log。
 
 **第四条（来自 Deep Agents，工具面生成机制）**：**能力缺失 = 工具面缺失。** provider 必须声明 `capabilities`；工具声明 `requires`；装配阶段按能力过滤，**不支持的动作对模型直接隐藏，而不是返回一个权限错误**。模型看不见它做不到的事，就不会浪费一步去调它（详见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §1.3）。同时与 profile 手工声明取并集：声明可读可审计，探测防漂移。
 
+**第五条（来自沙箱调研，执行世界的归属）**：**`sandbox` 不是第三个工具，而是“执行世界的边界”——`ctx.fs` 与 `ctx.subprocess` 的默认 provider 由它派生**（一个换、两个跟着换）。否则会出现“`bash` 在容器里 `cat` 是空的，`read_file` 却读到了内容”的语义分裂，比没沙箱更危险（它训练模型相信一个不存在的世界）。配套两条硬规则：**默认 fail-closed**（沙箱起不来就报错，不静默降级）、**实际生效的隔离等级必须进 session log**（`sandbox/probe` durable 事件）。详见 [SANDBOX.md](./SANDBOX.md) §4。
+
 一期范围建议：`llm` / `tools` / `agentLoop` / `sessions` / `systemPrompt` / `mcp` / `policy` 七个必做；`checkpoints`（只做消息锚点 + 影子 git 快照，不含 compare）与 `inbox` 建议一并必做，否则 fork/resume 语义不完整。
 
-**因为“基础工具不用手动定义”是你的硬要求，`fs` 与 `subprocess` 也从“定接口留空”提升为一期必做**（否则那 7 个内置工具跑不起来，见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §2.1 与 §6-1/2）；`skills`（一期 L1/L2）与 `planning`（`write_todos`，opt-in）一并一期。定接口留空实现的只剩：`sandbox`（OS 级列二期）/ `memory` / `telemetry` / `repoIntel`。
+**因为“基础工具不用手动定义”是你的硬要求，`fs` 与 `subprocess` 也从“定接口留空”提升为一期必做**（否则那 7 个内置工具跑不起来，见 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §2.1 与 §6-1/2）；`skills`（一期 L1/L2）与 `planning`（`write_todos`，opt-in）一并一期。**`sandbox` 也从二期提到一期**（只做 `native` 档：Seatbelt + bwrap + probe + fail-closed；容器/远程/CoW 归二期）——因为它是 `bash` 能否安全上面的前提。定接口留空实现的只剩：`memory` / `telemetry` / `repoIntel`。
 
 ---
 
@@ -363,16 +365,18 @@ packages/
 
 ---
 
-## 9. 开放问题（请逐条拍板）
+## 9. 开放问题（**已定稿**，v2.4：作者授权"按建议方向来"，以下即工程约束，改动需走 ADR）
 
-1. **内核自研 vs 直接用 Cordis**：Cordis 源自 Koishi 生态、dsh 是 vendored 进仓库的。我们自研一个约 800 行的 TS 精简内核（只做 effect/inject/service/event 四件事）可控性更好，但偏离官方；直接用 Cordis 省一大块，代价是多一个上游依赖 + 概念耦合。**建议自研精简内核。**
-2. **seam 数量一期收敛到 7 个**是否够（§3 建议清单）？如果你一期就想做代码类 Agent，`fs/subprocess/sandbox` 必须提前。
-3. **profile 是否对外暴露**：暴露则用户可自定义配方（强但概念多），不暴露则只有 `createReactAgent` 选项对象（简单但失去分层覆写）。**建议一期内部实现分层、对外只暴露 `patches` 数组。**
-4. **ReAct prompt 模板是否允许整体覆盖**：允许则 seam 更纯，不允许则可保证行为一致。dsh 的答案是允许（`ctx.systemPrompt` 分段装配）。
-5. **Session log 一期是否必做**：不做则没有 fork/resume/审计，也失去了"模型可见=已记录"这条最有价值的不变量。做了才有断点续跑。**强烈建议一期必做（JSONL 即可）。**
-6. **waterfall 与"中间件"心智冲突**：SDK 用户可能更熟 `use(middleware)`。是否在外层提供 `agent.use()` 语法糖，内部转成 waterfall 监听者？**建议加糖，内核不变。**
-7. **`@agentic/*` scope 是否与 npm 现有包冲突**（上一版遗留，发包前必须确认）。
-8. **新增的 4 个取舍**（`ctx.checkpoints` 是否一期必做、session 树一期开多少、三道闸的默认强度、worktree 是否作为 teams 默认隔离单位）见 [HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md) §7。
+1. **内核自研 vs 直接用 Cordis** → ✅ **自研精简内核**（`@agentic/kernel`，只做 ctx / service / event / effect / inject / fiber）。
+2. **seam 一期数量** → ✅ 一期落地：`llm` `tools` `agentLoop` `sessions` `systemPrompt` `policy` `mcp` `fs` `subprocess` `sandbox` `skills` `planning` `checkpoints` `inbox`；`memory` / `telemetry` / `repoIntel` **只定接口，无实现**。
+3. **profile 是否对外暴露** → ✅ **内部实现分层，对外只暴露 `patches`**（`createReactAgent({ patches })`）；`defineProfile`/`defineBundle` 公开但文档标为"进阶"。
+4. **ReAct prompt 模板是否允许整体覆盖** → ✅ 允许（`ctx.systemPrompt` 分段装配，`prompt` 选项可整替）。
+5. **Session log 一期必做** → ✅ 必做，JSONL v0。
+6. **`agent.use()` 语法糖** → ✅ 加糖，内部转 waterfall 监听者，内核不变。
+7. **`@agentic/*` scope 可用性** → ⏳ 发包前必须核 npm；本期所有包 `private: true`，不影响本地 workspace 开发。
+8. **v2.1 四个取舍** → ✅ 全部按建议：`ctx.checkpoints` 一期必做（消息锚点 + 影子 git，不含 `compare`）；session 一期开 `parentId` + `fork` API（`/tree` 导航与 `compare` 二期）；闸的默认强度 = **`workspace-write` + fail-closed**；`worktree` 作为 `teams` 的默认并行隔离单位。
+9. **v2.2 四个取舍**（详 [BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md) §7）→ ✅ 全部按建议：内置工具采用社区名 `read_file`/`write_file`/`edit_file`/`bash`；`task` **算** core 第 8 个工具但默认预算封顶（子 agent 共享父预算且单列）；skills 规模墙 = **30**；`toolFromFunction` **公开但文档标注不建议用于对外发布的关键工具**。
+10. **v2.3 四个取舍**（详 [SANDBOX.md](./SANDBOX.md) §8）→ ✅ 全部按建议：默认 `native / workspace-write / fail-closed`，`off` 必须显式声明且界面常亮警告；`allowUnsandboxed` 默认 **false**；**容器后端进一期**（docker/podman 两个，不做 devcontainer 定制）；`WorkspaceView` 接口**一期就抽象**，影子 git 作为其兜底实现。
 
 ---
 
@@ -386,3 +390,4 @@ packages/
 - **Tools 定义与三 surface 导入路径规范**：[SDK_SURFACE.md](./SDK_SURFACE.md)
 - **成熟 harness 案例研究与取舍裁决（dsh / pi / Codex / 回退系）**：[HARNESS_CASE_STUDIES.md](./HARNESS_CASE_STUDIES.md)
 - **内置原子工具与 Skills（Deep Agents 调研 + 工具格式契约）**：[BUILTIN_TOOLS.md](./BUILTIN_TOOLS.md)
+- **沙箱：各家怎么实现 + 我们的沙箱 SDK（Codex / Claude Code / letta / dsh / 云端厂商）**：[SANDBOX.md](./SANDBOX.md)
