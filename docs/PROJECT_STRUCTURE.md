@@ -52,13 +52,14 @@ agentic/
 │   ├── HARNESS_CASE_STUDIES.md        # ★ dsh / pi / Codex / 回退系对比与我们的取舍裁决
 │   ├── BUILTIN_TOOLS.md               # ★ 内置原子工具、Skills、工具格式契约（Deep Agents 调研）
 │   ├── SANDBOX.md                     # ★ 沙箱：各家怎么实现 + 我们的沙箱 SDK（Codex / Claude Code / letta / dsh / 云端厂商）
-│   ├── SEAM_CATALOG.md               # seam 清单（Definition/Provider/Consumer 三列）
-│   ├── EVENT_MAP.md                  # 事件全集 + producer/consumer + durable/live 标记
-│   ├── SDK_GUIDE.md                  # 对外使用指南
-│   └── FORKING_PLUGINS.md            # 如何替换某个能力而不 fork（插件开发指南）
+│   ├── SEAM_CATALOG.md                # （规划中）seam 清单（Definition/Provider/Consumer 三列）
+│   ├── EVENT_MAP.md                   # （规划中）事件全集 + producer/consumer + durable/live 标记
+│   ├── SDK_GUIDE.md                   # （规划中）对外使用指南
+│   └── FORKING_PLUGINS.md             # （规划中）如何替换某个能力而不 fork（插件开发指南）
 │
 ├── packages/
 │   │
+│   │   # ── 内核 / 类型 / SDK 门面 ───────────────────────────────
 │   ├── kernel/                       # @agentic/kernel —— 微内核，只有组合语义
 │   │   ├── package.json              # publishConfig.access: public
 │   │   ├── src/
@@ -97,27 +98,41 @@ agentic/
 │   │   │   └── internal/             # ★ 不对外导出
 │   │   └── tests/
 │   │
-│   ├── plugins/                      # ★ 能力提供者，插件之间零依赖，只通过 ctx key 协作
-│   │   ├── agent-loop-react/         # @agentic/plugin-agent-loop-react —— ReAct 循环（ctx.agentLoop 默认 provider）
-│   │   │   └── src/{index,loop,step,turn,inbox,cancellation,retry}.ts   # inbox = ctx.inbox 默认 provider（插话分类：append\|newTask\|interrupt）
-│   │   ├── llm/                      # @agentic/plugin-llm —— ctx.llm seam + 消息/流词汇
+│   │   # ── LLM 领域：模型 seam + 厂商实现，各自放各自的 ───────
+│   ├── llm/                            # ★ LLM 领域
+│   │   ├── seam/                       # @agentic/plugin-llm —— ctx.llm seam + 消息/流词汇
 │   │   │   └── src/{index,capabilities,stream-vocab}.ts
-│   │   ├── tools/                      # @agentic/plugin-tools —— ctx.tools：工具作用域注册表 + 守卫执行管线 + **能力探测隐面**
-│   │   │   └── src/{index,registry,scope,define-tool,pipeline,capabilities,result,decorators/{guards,retry,cache}}.ts   # decorators = T2 的“像继承的体验”（`@agentic/plugin-tools/operators`）
+│   │   └── providers/                  # llm seam 的外部实现（只放厂商适配）
+│   │       ├── openai/                 # @agentic/provider-openai（同时覆盖 OpenAI 兼容端点）
+│   │       ├── anthropic/              # @agentic/provider-anthropic
+│   │       └── ollama/                 # @agentic/provider-ollama
+│   │
+│   │   # ── Agent 领域：循环 / 编排 / 会话 / 记忆，各自放各自的 ─
+│   ├── agent/                          # ★ Agent 领域
+│   │   ├── loop/                       # @agentic/plugin-agent-loop-react —— ReAct 循环（ctx.agentLoop 默认 provider）
+│   │   │   └── src/{index,loop,step,turn,inbox,cancellation,retry}.ts   # inbox = ctx.inbox 默认 provider（插话分类：append\|newTask\|interrupt）
+│   │   ├── teams/                      # ★ @agentic/plugin-teams —— 多 Agent：roster + 任务板 + mailbox（opt-in seam）
+│   │   │   └── src/{index,supervisor,pipeline,handoff,task-board,mailbox,blackboard,budget-shard,worktree,tools/task}.ts   # task = 内置子 agent 工具；worktree = 并行隔离单位
+│   │   ├── workflow/                   # ★ @agentic/plugin-workflow —— 在 ctx.agentLoop 之上的编排 provider（不新建运行时）
+│   │   │   └── src/{index,sequence,parallel,branch,loop,nodes,operators/{retry,human,checkpoint,compensate}}.ts
 │   │   ├── session/                    # @agentic/plugin-session —— ctx.sessions：append-only **树** log（parentId）+ deriveMessages
 │   │   │   └── src/{index,log,derive,projection,persistence,jsonl-v0}.ts
 │   │   ├── checkpoint/                 # ★ @agentic/plugin-checkpoint —— ctx.checkpoints：消息状态与世界状态一起原子回滚（消息投影 + 影子 git）
 │   │   │   └── src/{index,snapshot,shadow-git,rollback,compare,prune}.ts   # 见 HARNESS_CASE_STUDIES §2.4
+│   │   ├── memory/                     # @agentic/plugin-memory —— ctx.memory + memory_* 工具
 │   │   ├── system-prompt/              # @agentic/plugin-system-prompt —— 分段装配 + tool schema 汇入
 │   │   ├── context/                    # @agentic/plugin-context —— 压缩/裁剪 + **结果驱逐到 /artifacts/**（挂 agent/request waterfall）
-│   │   ├── memory/                     # @agentic/plugin-memory —— ctx.memory + memory_* 工具
+│   │   └── planning/                   # @agentic/plugin-planning —— ctx.planning：write_todos（**opt-in**，不入 core 面）
+│   │
+│   │   # ── 工具领域：内置原子工具与执行底座 ───────────────────
+│   ├── tools/                          # ★ 工具领域
+│   │   ├── tools/                      # @agentic/plugin-tools —— ctx.tools：工具作用域注册表 + 守卫执行管线 + **能力探测隐面**
+│   │   │   └── src/{index,registry,scope,define-tool,pipeline,capabilities,result,decorators/{guards,retry,cache}}.ts   # decorators = T2 的“像继承的体验”（`@agentic/plugin-tools/operators`）
 │   │   ├── fs/                         # ★ @agentic/plugin-fs —— ctx.fs：七方法 Backend + capabilities + routes（一期必做）
 │   │   │   └── src/{index,backend,virtual-mode,permissions,routes,tools/{ls,read-file,write-file,edit-file,glob,grep}}.ts
 │   │   ├── subprocess/                 # ★ @agentic/plugin-subprocess —— ctx.subprocess（Bun.spawn）+ tools/bash.ts（一期必做）
 │   │   ├── skills/                     # ★ @agentic/plugin-skills —— ctx.skills：Agent Skills 规范的发现/分级/事件
 │   │   │   └── src/{index,discover,frontmatter,sources,prefilter,trust,events}.ts   # 见 BUILTIN_TOOLS §3
-│   │   ├── planning/                   # @agentic/plugin-planning —— ctx.planning：write_todos（**opt-in**，不入 core 面）
-│   │   ├── sandbox/                    # @agentic/plugin-sandbox —— ctx.sandbox：与 fs/subprocess 共享执行世界〔接口先行〕
 │   │   ├── mcp/                        # ★ @agentic/plugin-mcp —— 见 MCP_INTEGRATION.md
 │   │   │   └── src/
 │   │   │       ├── index.ts            # apply(ctx)：连接池 → tools/list → 命名映射 → 注册进 ctx.tools
@@ -133,30 +148,27 @@ agentic/
 │   │   │           ├── http.ts         # Streamable HTTP + Mcp-Session-Id
 │   │   │           └── remote.ts       # mcp-remote 代理（legacy SSE）
 │   │   ├── policy/                     # ★ @agentic/plugin-policy —— ctx.policy + tools/pre-execute 的 ask/deny + **sensitive-file-rules.ts**（kimi 式硬过滤：.env / id_* / credentials / .pem|.key|.old）
-│   │   ├── sandbox/                    # ★ @agentic/plugin-sandbox —— ctx.sandbox 装配：**派生** ctx.fs 与 ctx.subprocess（一个换、两个跟着换）+ `sandbox/probe` durable 事件 + **fail-closed 默认**
-│   │   ├── workflow/                   # ★ @agentic/plugin-workflow —— 在 ctx.agentLoop 之上的编排 provider（不新建运行时）
-│   │   │   └── src/{index,sequence,parallel,branch,loop,nodes,operators/{retry,human,checkpoint,compensate}}.ts
-│   │   ├── teams/                      # ★ @agentic/plugin-teams —— 多 Agent：roster + 任务板 + mailbox（opt-in seam）
-│   │   │   └── src/{index,supervisor,pipeline,handoff,task-board,mailbox,blackboard,budget-shard,worktree,tools/task}.ts   # task = 内置子 agent 工具；worktree = 并行隔离单位
-│   │   ├── repo-intel/                 # ★ @agentic/plugin-repo-intel —— ctx.repoIntel：代码知识图谱 + repo_overview
-│   │   │   └── src/{index,overview/{structure,conventions,intent-reality,gaps},graph,query,history,impact}.ts
-│   │   ├── observability/              # @agentic/plugin-observability —— telemetry/* emit + trace
 │   │   └── commands/                   # @agentic/plugin-commands —— ctx.commands：人工命令不过模型 turn
 │   │
-│   ├── providers/                      # llm seam 的外部实现（与 plugins 分层：这里只放厂商适配）
-│   │   ├── openai/                     # @agentic/provider-openai（同时覆盖 OpenAI 兼容端点）
-│   │   ├── anthropic/                  # @agentic/provider-anthropic
-│   │   └── ollama/                     # @agentic/provider-ollama
+│   │   # ── 沙箱领域 ──────────────────────────────────────────
+│   ├── sandbox/                        # ★ 沙箱领域
+│   │   ├── native/                     # ★ @agentic/sandbox（一期）—— 沙箱契约 + native 后端，**零厂商依赖**
+│   │   │   ├── src/{index,backend,policy,capabilities,probe,net-proxy}.ts   # SandboxBackend / defineSandboxPolicy（策略即数据，可进 dumpConfig）/ 本地 HTTP CONNECT 代理
+│   │   │   ├── src/native/{seatbelt,bwrap,windows,argv}.ts   # SBPL 模板参数化路径 / bwrap 挂载序（--tmpfs 遮蔽＝缺席，--die-with-parent，carve-out 不得为 deny 祖先）/ 一期引导 WSL2 或 container / argv 优先不拼 shell
+│   │   │   ├── src/policies/*.sbpl.tpl  # 2×3 矩阵：permissive|restrictive × open|closed|proxied（形状抄 qwen-code，模板可单测快照）
+│   │   │   └── src/testing/fake-sandbox.ts  # ★ CI 用假后端（probe 报告可注入，不依赖真 OS）
+│   │   ├── plugin/                     # ★ @agentic/plugin-sandbox —— ctx.sandbox 装配：**派生** ctx.fs 与 ctx.subprocess（一个换、两个跟着换）+ `sandbox/probe` durable 事件 + **fail-closed 默认**
+│   │   ├── container/                  # @agentic/sandbox-container（一期建议）—— docker/podman；会话级复用；默认 --network none --memory --cpus --cap-drop ALL
+│   │   ├── remote/                     # @agentic/sandbox-remote（**二期**）—— e2b（互操作轴）/ daytona / modal adapter + **world 级 snapshot/hydrate**
+│   │   └── iso/                        # @agentic/sandbox-iso（**二期**）—— B 类 CoW 工作区视图：APFS clonefile / overlayfs / btrfs / reflink / ProjFS / worktree 兜底
 │   │
-│   ├── sandbox/                      # ★ @agentic/sandbox（一期）—— 沙箱契约 + native 后端，**零厂商依赖**
-│   │   ├── src/{index,backend,policy,capabilities,probe,net-proxy}.ts   # SandboxBackend / defineSandboxPolicy（策略即数据，可进 dumpConfig）/ 本地 HTTP CONNECT 代理
-│   │   ├── src/native/{seatbelt,bwrap,windows,argv}.ts   # SBPL 模板参数化路径 / bwrap 挂载序（--tmpfs 遮蔽＝缺席，--die-with-parent，carve-out 不得为 deny 祖先）/ 一期引导 WSL2 或 container / argv 优先不拼 shell
-│   │   ├── src/policies/*.sbpl.tpl   # 2×3 矩阵：permissive|restrictive × open|closed|proxied（形状抄 qwen-code，模板可单测快照）
-│   │   └── src/testing/fake-sandbox.ts  # ★ CI 用假后端（probe 报告可注入，不依赖真 OS）
-│   ├── sandbox-container/            # @agentic/sandbox-container（一期建议）—— docker/podman；会话级复用；默认 --network none --memory --cpus --cap-drop ALL
-│   ├── sandbox-remote/               # @agentic/sandbox-remote（**二期**）—— e2b（互操作轴）/ daytona / modal adapter + **world 级 snapshot/hydrate**
-│   ├── sandbox-iso/                  # @agentic/sandbox-iso（**二期**）—— B 类 CoW 工作区视图：APFS clonefile / overlayfs / btrfs / reflink / ProjFS / worktree 兜底
+│   │   # ── 工程智能 / 可观测 ──────────────────────────────────
+│   ├── intel/                          # ★ 工程智能领域
+│   │   └── repo-intel/                 # ★ @agentic/plugin-repo-intel —— ctx.repoIntel：代码知识图谱 + repo_overview
+│   │       └── src/{index,overview/{structure,conventions,intent-reality,gaps},graph,query,history,impact}.ts
+│   ├── observability/                  # @agentic/plugin-observability —— telemetry/* emit + trace
 │   │
+│   │   # ── 分发组合包 / 可执行入口 ────────────────────────────
 │   ├── bundles/                        # ★ 可分发组合包（bundle = 插件集 + 配置行）
 │   │   ├── standard/                   # @agentic/bundle-standard —— session+llm+tools+loop+prompt+policy
 │   │   ├── mcp/                        # @agentic/bundle-mcp —— plugin-mcp + 默认 policy 规则 + 命名配置
@@ -365,7 +377,10 @@ agent.dispose();                                // 全树 effect 逆序回滚，
 
 ```jsonc
 {
-  "workspaces": ["packages/*", "packages/plugins/*", "packages/providers/*",
+  "workspaces": ["packages/*",                                             // kernel/types/core/cli + 领域壳目录
+                 "packages/llm/providers/*", "packages/agent/*",           // llm 厂商实现 / agent 领域
+                 "packages/tools/*", "packages/sandbox/*",                 // 工具领域 / 沙箱领域
+                 "packages/intel/*", "packages/observability/*",           // 工程智能 / 可观测
                  "packages/bundles/*", "apps/*", "examples/*"],
   "scripts": {
     "dev":            "bun run --cwd apps/playground src/main.ts",
